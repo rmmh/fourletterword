@@ -71,29 +71,72 @@ static void gen_permutation(uint8_t *buf, int len)
     }
 }
 
-// compute size of value encoded with variable-nibble format
+// encoded value with variable-nibble format
 //
 // Bit pattern            Values
-// 0xxx:                    0-7
-// 1xxx0xxx:                8-71
-// 1xxx1xxx0xxx:           72-583
-// 1xxx1xxx1xxx0xxx:      584-4679
-// 1xxx1xxx1xxx1xxx0xxx: 4680-37448
+// 0xxx:                    1-8
+// 1xxx0xxx:                9-72
+// 1xxx1xxx0xxx:           73-584
+// 1xxx1xxx1xxx0xxx:      585-4680
+// 1xxx1xxx1xxx1xxx0xxx: 4681-37449
+//
+// Big endian, for simpler decoding
+static unsigned nibble_encode(int delta, uint8_t *buf)
+{
+    assert(delta > 0);
+    // calculate nibbles (inherently litt-endian)
+    unsigned nibbles = 0;
+    uint8_t out[10];
+    while (delta) {
+        delta--;
+        out[nibbles++] = delta & 7;
+        delta >>= 3;
+    }
+    // write nibbles big-endian
+    int bits = 0;
+    while (nibbles--) {
+        int val = out[nibbles];
+        if (nibbles)
+            val |= 8;
+        if (bits & 4)
+            *buf++ |= val << 4;
+        else
+            *buf = val;
+        bits += 4;
+    }
+    return bits;
+}
+
+static unsigned nibble_decode(int *delta_out, uint8_t *buf)
+{
+    int nib = 0;
+    int val;
+    int delta = 0;
+    do {
+        if (nib & 1) {
+            val = (*buf++) >> 4;
+        } else {
+            val = *buf & 0xF;
+        }
+        nib++;
+        delta = (delta << 3) | (val & 7);
+        delta++;
+    } while (val & 0x8);
+    *delta_out = delta;
+    return nib * 4;
+}
+
 static unsigned nibble_encoded_size(int delta)
 {
-    if (delta < 0b1000)
-        return 4;
-    else if (delta < 0b1001000)
-        return 8;
-    else if (delta < 0b1001001000)
-        return 12;
-    else if (delta < 0b1001001001000)
-        return 16;
-    else if (delta < 0b1001001001001000)
-        return 20;
-    else if (delta < 0b1001001001001001000)
-        return 24;
-    return 10000;
+    uint8_t buf[20];
+    memset(buf, 0, 20);
+    unsigned bits = nibble_encode(delta, buf);
+    int delta_dec;
+    assert(bits == nibble_decode(&delta_dec, buf));
+    //printf("%d [%02X %02X %02X %02X] %d\n", delta,
+    //       buf[0], buf[1], buf[2], buf[3], delta_dec);
+    assert(delta_dec == delta);
+    return bits;
 }
 
 // determine how many bits it would take to encode the words
@@ -112,7 +155,7 @@ static unsigned compute_efficiency(void)
     int last = 0;
     unsigned bits = 0;
     for (i = 0; i < NUM_WORDS; i++) {
-        int delta = word_values[i] - last - 1;
+        int delta = word_values[i] - last;
         last = word_values[i];
         bits += nibble_encoded_size(delta);
     }
@@ -161,4 +204,5 @@ int main(void)
             iter = 0;
         }
     }
+    return 0;
 }
