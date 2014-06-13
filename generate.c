@@ -163,6 +163,13 @@ static unsigned compute_efficiency(void)
     return bits;
 }
 
+void reseed(void)
+{
+    FILE *rand = fopen("/dev/urandom", "r");
+    fread(&s, sizeof(uint64_t), 2, rand);
+    fclose(rand);
+}
+
 int main(void)
 {
     int i;
@@ -171,10 +178,7 @@ int main(void)
         fscanf(wordlist, " %4s ", words[i]);
     fclose(wordlist);
 
-    FILE *rand = fopen("/dev/urandom", "r");
-    fread(&s, sizeof(uint64_t), 2, rand);
-    fclose(rand);
-
+    reseed();
     gen_permutation(letter_to_value, 26);
 
     for (i = 0; i < NUM_WORDS; i++) {
@@ -193,6 +197,7 @@ int main(void)
         iter++;
         if (!(iter & 0xFFFFF)) {
             printf("iters: %lld\n", iter);
+            reseed();
         }
         if (bytes <= best) {
             build_rev();
