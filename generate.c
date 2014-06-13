@@ -31,13 +31,16 @@ char words[NUM_WORDS][5];
 uint8_t letter_to_value[26];
 uint8_t value_to_letter[26];
 
-static int word_to_int(char *word)
+// Initialize buf to a permutation -- each value in [0, len) is present
+static void gen_permutation(uint8_t *buf, int len)
 {
-    int i;
-    int ret = 0;
-    for (i = 3; i >= 0; i--)
-        ret = (ret * 26) + letter_to_value[word[i] - 'A'];
-    return ret;
+    int i, j;
+    for (i = 0; i < len; i++) {
+        j = xrand() % (i + 1);
+        if (j != i)
+            buf[i] = buf[j];
+        buf[j] = i;
+    }
 }
 
 static void build_rev(void)
@@ -47,6 +50,29 @@ static void build_rev(void)
         value_to_letter[letter_to_value[i]] = i;
     }
 }
+
+static void load_from_value_to_letter(const char *perm)
+{
+    int i;
+    assert(strlen(perm) == 26);
+    for (i = 0; i < 26; i++) {
+        assert(perm[i] >= 'a' && perm[i] <= 'z');
+        value_to_letter[i] = perm[i] - 'a';
+    }
+    for (i = 0; i < 26; i++) {
+        letter_to_value[value_to_letter[i]] = i;
+    }
+}
+
+static int word_to_int(char *word)
+{
+    int i;
+    int ret = 0;
+    for (i = 3; i >= 0; i--)
+        ret = (ret * 26) + letter_to_value[word[i] - 'A'];
+    return ret;
+}
+
 
 static void int_to_word(int word_int, char *out)
 {
@@ -59,15 +85,16 @@ static void int_to_word(int word_int, char *out)
     out[4] = 0;
 }
 
-// Initialize buf to a permutation -- each value in [0, len) is present
-static void gen_permutation(uint8_t *buf, int len)
+static void word_int_test(void)
 {
-    int i, j;
-    for (i = 0; i < len; i++) {
-        j = xrand() % (i + 1);
-        if (j != i)
-            buf[i] = buf[j];
-        buf[j] = i;
+    int i;
+    gen_permutation(letter_to_value, 26);
+
+    for (i = 0; i < NUM_WORDS; i++) {
+        char word_again[5];
+        int word_val = word_to_int(words[i]);
+        int_to_word(word_val, word_again);
+        assert(!strcmp(words[i], word_again));
     }
 }
 
@@ -84,7 +111,7 @@ static void gen_permutation(uint8_t *buf, int len)
 static unsigned nibble_encode(int delta, uint8_t *buf)
 {
     assert(delta > 0);
-    // calculate nibbles (inherently litt-endian)
+    // calculate nibbles (inherently little-endian)
     unsigned nibbles = 0;
     uint8_t out[10];
     while (delta) {
@@ -92,6 +119,9 @@ static unsigned nibble_encode(int delta, uint8_t *buf)
         out[nibbles++] = delta & 7;
         delta >>= 3;
     }
+    if (!buf)
+        return 4 * nibbles;
+
     // write nibbles big-endian
     int bits = 0;
     while (nibbles--) {
@@ -128,15 +158,23 @@ static unsigned nibble_decode(int *delta_out, uint8_t *buf)
 
 static unsigned nibble_encoded_size(int delta)
 {
-    uint8_t buf[20];
-    memset(buf, 0, 20);
-    unsigned bits = nibble_encode(delta, buf);
-    int delta_dec;
-    assert(bits == nibble_decode(&delta_dec, buf));
-    //printf("%d [%02X %02X %02X %02X] %d\n", delta,
-    //       buf[0], buf[1], buf[2], buf[3], delta_dec);
-    assert(delta_dec == delta);
-    return bits;
+    return nibble_encode(delta, NULL);
+}
+
+static void nibble_encode_test(void)
+{
+    int delta;
+    for (delta = 1; delta < 60000; delta++) {
+        int delta_dec;
+        uint8_t buf[20];
+        memset(buf, 0, 20);
+        unsigned bits = nibble_encode(delta, NULL);
+        assert(bits == nibble_encode(delta, buf));
+        assert(bits == nibble_decode(&delta_dec, buf));
+        assert(bits == nibble_encoded_size(delta));
+    }
+    assert(nibble_encode(8, NULL) == 4);
+    assert(nibble_encode(1, NULL) == 4);
 }
 
 // determine how many bits it would take to encode the words
@@ -160,15 +198,22 @@ static unsigned compute_efficiency(void)
         bits += nibble_encoded_size(delta);
     }
 
-    return bits;
+    unsigned bytes = (bits + 7) / 8 + 26;
+    return bytes;
 }
 
-void reseed(void)
+static void reseed(void)
 {
     FILE *rand = fopen("/dev/urandom", "r");
     fread(&s, sizeof(uint64_t), 2, rand);
     fclose(rand);
 }
+
+static char *permutations[] = {
+    "nuaioerytmfvjwgdlhscbkzxpq",
+    "ueclwpkbyjhsaivdntofxmgrzq",
+    NULL
+};
 
 int main(void)
 {
@@ -178,22 +223,21 @@ int main(void)
         fscanf(wordlist, " %4s ", words[i]);
     fclose(wordlist);
 
-    reseed();
-    gen_permutation(letter_to_value, 26);
+    word_int_test();
+    nibble_encode_test();
 
-    for (i = 0; i < NUM_WORDS; i++) {
-        char word_again[5];
-        int word_val = word_to_int(words[i]);
-        int_to_word(word_val, word_again);
-        assert(!strcmp(words[i], word_again));
+    char **test;
+    for (test = permutations; *test != NULL; test++) {
+        load_from_value_to_letter(*test);
+        printf("%s  bytes: %d\n", *test, compute_efficiency());
     }
 
+    reseed();
     unsigned best = -1;
     long long iter = 0;
     while (1) {
         gen_permutation(letter_to_value, 26);
-        unsigned bits = compute_efficiency();
-        unsigned bytes = (bits + 7) / 8 + 26;
+        unsigned bytes = compute_efficiency();
         iter++;
         if (!(iter & 0xFFFFF)) {
             printf("iters: %lld\n", iter);
