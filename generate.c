@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "decode.h"
+
 ////////////////////////////
 // xorshift128+ generator //
 ////////////////////////////
@@ -23,8 +25,6 @@ static int int_compar(const void *a, const void *b)
 {
     return *(int*)a - *(int*)b;
 }
-
-#define NUM_WORDS 5526
 
 char words[NUM_WORDS][5];
 
@@ -47,7 +47,7 @@ static void build_rev(uint8_t *l2v, uint8_t *v2l)
 {
     int i;
     for (i = 0; i < 26; i++) {
-        v2l[l2v[i]] = i;
+        v2l[l2v[i]] = i + 'a';
     }
 }
 
@@ -57,10 +57,10 @@ static void load_from_value_to_letter(const char *perm)
     assert(strlen(perm) == 26);
     for (i = 0; i < 26; i++) {
         assert(perm[i] >= 'a' && perm[i] <= 'z');
-        value_to_letter[i] = perm[i] - 'a';
+        value_to_letter[i] = perm[i];
     }
     for (i = 0; i < 26; i++) {
-        letter_to_value[value_to_letter[i]] = i;
+        letter_to_value[value_to_letter[i] - 'a'] = i;
     }
 }
 
@@ -70,40 +70,29 @@ static void print_letter_to_value(uint8_t *l2v)
     uint8_t value_to_letter[26];
     build_rev(l2v, value_to_letter);
     for (i = 0; i < 26; i++)
-        printf("%c", value_to_letter[i] + 'a');
+        printf("%c", value_to_letter[i]);
 }
 
-static int word_to_int(char *word)
+static uint32_t word_to_u32(char *word)
 {
     int i;
-    int ret = 0;
+    unsigned ret = 0;
     for (i = 3; i >= 0; i--)
         ret = (ret * 26) + letter_to_value[word[i] - 'A'];
     return ret;
-}
-
-
-static void int_to_word(int word_int, char *out)
-{
-    build_rev(letter_to_value, value_to_letter);
-    int i;
-    for (i = 0; i < 4; i++) {
-        out[i] = value_to_letter[word_int % 26] + 'A';
-        word_int /= 26;
-    }
-    out[4] = 0;
 }
 
 static void word_int_test(void)
 {
     int i;
     gen_permutation(letter_to_value, 26);
+    build_rev(letter_to_value, value_to_letter);
 
     for (i = 0; i < NUM_WORDS; i++) {
         char word_again[5];
-        int word_val = word_to_int(words[i]);
-        int_to_word(word_val, word_again);
-        assert(!strcmp(words[i], word_again));
+        int word_val = word_to_u32(words[i]);
+        u32_to_word(word_val, word_again);
+        assert(!strncasecmp(words[i], word_again, 4));
     }
 }
 
@@ -117,7 +106,7 @@ static void word_int_test(void)
 // 1xxx1xxx1xxx1xxx0xxx: 4681-37449
 //
 // Big endian, for simpler decoding
-static unsigned nibble_encode(int delta, uint8_t *buf)
+static uint32_t nibble_encode(int delta, uint32_t idx, uint8_t *buf)
 {
     assert(delta > 0);
     // calculate nibbles (inherently little-endian)
@@ -129,85 +118,81 @@ static unsigned nibble_encode(int delta, uint8_t *buf)
         delta >>= 3;
     }
     if (!buf)
-        return 4 * nibbles;
+        return nibbles;
 
     // write nibbles big-endian
-    int bits = 0;
     while (nibbles--) {
         int val = out[nibbles];
         if (nibbles)
             val |= 8;
-        if (bits & 4)
-            *buf++ |= val << 4;
+        if (idx & 1)
+            buf[idx>>1] |= val << 4;
         else
-            *buf = val;
-        bits += 4;
+            buf[idx>>1] = val;
+        idx++;
     }
-    return bits;
+    return idx;
 }
 
-static unsigned nibble_decode(int *delta_out, uint8_t *buf)
-{
-    int nib = 0;
-    int val;
-    int delta = 0;
-    do {
-        if (nib & 1) {
-            val = (*buf++) >> 4;
-        } else {
-            val = *buf & 0xF;
-        }
-        nib++;
-        delta = (delta << 3) | (val & 7);
-        delta++;
-    } while (val & 0x8);
-    *delta_out = delta;
-    return nib * 4;
-}
 
 static unsigned nibble_encoded_size(int delta)
 {
-    return nibble_encode(delta, NULL);
+    return nibble_encode(delta, 0, NULL);
 }
 
 static void nibble_encode_test(void)
 {
-    int delta;
+    uint32_t delta;
     for (delta = 1; delta < 60000; delta++) {
-        int delta_dec;
+        uint32_t delta_dec;
         uint8_t buf[20];
+
         memset(buf, 0, 20);
-        unsigned bits = nibble_encode(delta, NULL);
-        assert(bits == nibble_encode(delta, buf));
-        assert(bits == nibble_decode(&delta_dec, buf));
-        assert(bits == nibble_encoded_size(delta));
+        unsigned nib_count = nibble_encode(delta, 0, NULL);
+        assert(nib_count == nibble_encoded_size(delta));
+        assert(nib_count == nibble_encode(delta, 0, buf));
+        assert(nib_count == nibble_decode(&delta_dec, 0, buf));
+        assert(delta_dec == delta);
+
+        memset(buf, 0, 20);
+        assert(nib_count + 1 == nibble_encode(delta, 1, buf));
+        assert(nib_count + 1 == nibble_decode(&delta_dec, 1, buf));
+        assert(delta_dec == delta);
     }
-    assert(nibble_encode(8, NULL) == 4);
-    assert(nibble_encode(1, NULL) == 4);
+    assert(nibble_encode(8, 0, NULL) == 1);
+    assert(nibble_encode(1, 0, NULL) == 1);
+}
+
+static uint32_t encode(uint8_t *buf)
+{
+    /* convert words to ints */
+    int i;
+    int word_values[NUM_WORDS];
+    for (i = 0; i < NUM_WORDS; i++)
+        word_values[i] = word_to_u32(words[i]);
+    qsort(word_values, NUM_WORDS, sizeof(int), int_compar);
+
+    /* compress list of strictly increasing integers by
+     * encoding difference from previous word into nibbles*/
+    int last = 0;
+    uint32_t idx = 0;
+    for (i = 0; i < NUM_WORDS; i++)
+    {
+        int delta = word_values[i] - last;
+        last = word_values[i];
+        idx = nibble_encode(delta, idx, buf);
+    }
+
+    return idx;
 }
 
 // determine how many bits it would take to encode the words
 // with the current letter_to_value
 static unsigned compute_efficiency(void)
 {
-    /* convert words to ints */
-    int i;
-    int word_values[NUM_WORDS];
-    for (i = 0; i < NUM_WORDS; i++)
-        word_values[i] = word_to_int(words[i]);
-    qsort(word_values, NUM_WORDS, sizeof(int), int_compar);
-
-    /* compress list of strictly increasing integers by
-     * encoding difference from previous word into nibbles*/
-    int last = 0;
-    unsigned bits = 0;
-    for (i = 0; i < NUM_WORDS; i++) {
-        int delta = word_values[i] - last;
-        last = word_values[i];
-        bits += nibble_encoded_size(delta);
-    }
-
-    unsigned bytes = (bits + 7) / 8 + 26;
+    uint8_t nibbles_buf[NUM_WORDS * 8];
+    uint32_t nibbles = encode(nibbles_buf);
+    unsigned bytes = (nibbles + 1) / 2 + 26;
     return bytes;
 }
 
@@ -229,17 +214,42 @@ static void reseed(void)
     fclose(rand);
 }
 
+static void emit(char *fname)
+{
+    unsigned i;
+    uint8_t nibbles_buf[NUM_WORDS * 8];
+    uint32_t nibbles = encode(nibbles_buf);
+
+    FILE *fout = fopen(fname, "w");
+    fprintf(fout, "DATA uint8_t value_to_letter[26] = \"");
+    for (i = 0; i < 26; i++)
+        fprintf(fout, "%c", value_to_letter[i]);
+    fprintf(fout, "\";\n\n");
+
+    fprintf(fout, "DATA uint8_t words_encoded[] = {");
+
+    for (i = 0; i <= nibbles / 2; i++) {
+        if (!(i & 0xF))
+            fprintf(fout, "\n   ");
+        fprintf(fout, " 0x%02X,", nibbles_buf[i]);
+    }
+    fprintf(fout, "\n};\n");
+    fclose(fout);
+}
+
 static char *permutations[] = {
+    "mgxjqzvbdctwhfkspnlreoaiuy", // 4020
     "nuaioerytmfvjwgdlhscbkzxpq",
     "ueclwpkbyjhsaivdntofxmgrzq",
     "hctpxjvbskzfdgqmwlreoauiny",
     "yoauiernhlpxvkmgdfbzsjqwtc",
     "yuieaorhnlsptkcwgdbvxzjqfm", // 4022
-    "eiuoalrwhtcspgkvbdfzjqxmyn", // 4022
     NULL
 };
 
-int main(void)
+
+
+int main(int argc, char **argv)
 {
     int i;
     FILE *wordlist = fopen("list.txt", "r");
@@ -249,6 +259,14 @@ int main(void)
 
     word_int_test();
     nibble_encode_test();
+
+    if (argc >= 2 && !strcmp(argv[1], "-g")) {
+        char *fname = "list.gen.h";
+        printf("writing data for permutation %s to %s\n", *permutations, fname);
+        load_from_value_to_letter(*permutations);
+        emit(fname);
+        return 0;
+    }
 
     char **test;
     for (test = permutations; *test != NULL; test++) {
@@ -276,7 +294,7 @@ int main(void)
         gen_permutation(letter_to_value, 26);
         best = -1;
         uint8_t iter_best[26];
-        for (iter = 0; iter < 100000; iter++) {
+        for (iter = 0; iter < 50000; iter++) {
             /* try a change */
             minor_change();
             unsigned bytes = compute_efficiency();
