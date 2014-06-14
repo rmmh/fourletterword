@@ -43,11 +43,11 @@ static void gen_permutation(uint8_t *buf, int len)
     }
 }
 
-static void build_rev(void)
+static void build_rev(uint8_t *l2v, uint8_t *v2l)
 {
     int i;
     for (i = 0; i < 26; i++) {
-        value_to_letter[letter_to_value[i]] = i;
+        v2l[l2v[i]] = i;
     }
 }
 
@@ -64,6 +64,15 @@ static void load_from_value_to_letter(const char *perm)
     }
 }
 
+static void print_letter_to_value(uint8_t *l2v)
+{
+    int i;
+    uint8_t value_to_letter[26];
+    build_rev(l2v, value_to_letter);
+    for (i = 0; i < 26; i++)
+        printf("%c", value_to_letter[i] + 'a');
+}
+
 static int word_to_int(char *word)
 {
     int i;
@@ -76,7 +85,7 @@ static int word_to_int(char *word)
 
 static void int_to_word(int word_int, char *out)
 {
-    build_rev();
+    build_rev(letter_to_value, value_to_letter);
     int i;
     for (i = 0; i < 4; i++) {
         out[i] = value_to_letter[word_int % 26] + 'A';
@@ -202,6 +211,17 @@ static unsigned compute_efficiency(void)
     return bytes;
 }
 
+static void minor_change(void)
+{
+    int a = xrand() % 26;
+    int b = xrand() % 26;
+    if (a == b)
+        return;
+    int temp = letter_to_value[a];
+    letter_to_value[a] = letter_to_value[b];
+    letter_to_value[b] = temp;
+}
+
 static void reseed(void)
 {
     FILE *rand = fopen("/dev/urandom", "r");
@@ -212,6 +232,10 @@ static void reseed(void)
 static char *permutations[] = {
     "nuaioerytmfvjwgdlhscbkzxpq",
     "ueclwpkbyjhsaivdntofxmgrzq",
+    "hctpxjvbskzfdgqmwlreoauiny",
+    "yoauiernhlpxvkmgdfbzsjqwtc",
+    "yuieaorhnlsptkcwgdbvxzjqfm", // 4022
+    "eiuoalrwhtcspgkvbdfzjqxmyn", // 4022
     NULL
 };
 
@@ -235,23 +259,48 @@ int main(void)
     reseed();
     unsigned best = -1;
     long long iter = 0;
-    while (1) {
-        gen_permutation(letter_to_value, 26);
-        unsigned bytes = compute_efficiency();
-        iter++;
-        if (!(iter & 0xFFFFF)) {
-            printf("iters: %lld\n", iter);
-            reseed();
-        }
-        if (bytes <= best) {
-            build_rev();
-            for (i = 0; i < 26; i++)
-                printf("%c", 'a' + value_to_letter[i]);
-            printf("  bytes: %d  iters: %lld\n", bytes, iter);
 
-            best = bytes;
-            iter = 0;
+    /* Attempt to find a good alphabet permutation with Random Search.
+     *
+     * Algorithm:
+     *   Pick a configuration at random from the search space.
+     *   Until the maximum number of iterations are performed:
+     *     Pick a new configuration close to the best one found
+     *     If the new configuration is better, set best to it
+     */
+    uint8_t global_best[26];
+    unsigned best_global = -1;
+    while (1) {
+        /* initial attempt */
+        reseed();
+        gen_permutation(letter_to_value, 26);
+        best = -1;
+        uint8_t iter_best[26];
+        for (iter = 0; iter < 100000; iter++) {
+            /* try a change */
+            minor_change();
+            unsigned bytes = compute_efficiency();
+            if (bytes <= best) {
+                if (bytes < best) {
+                    best = bytes;
+                    print_letter_to_value(letter_to_value);
+                    printf("  bytes: %d  iters: %lld\n", bytes, iter);
+                    if (bytes < best_global) {
+                        memcpy(global_best, letter_to_value, sizeof(global_best));
+                        best_global = bytes;
+                    }
+                    iter = 0;
+                }
+                /* keep favorable change */
+                memcpy(iter_best, letter_to_value, sizeof(iter_best));
+            } else {
+                /* revert unfavorable change */
+                memcpy(letter_to_value, iter_best, sizeof(iter_best));
+            }
         }
+        printf("\n\nglobal best: %d ", best_global);
+        print_letter_to_value(global_best);
+        printf("\n");
     }
     return 0;
 }
