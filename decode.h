@@ -9,7 +9,7 @@
 #define DATA
 #endif
 
-uint32_t nibble_decode(uint32_t *value_out, uint32_t nibble, const uint8_t *buf);
+uint16_t nibble_decode(uint16_t *value_out, uint16_t nibble, const uint8_t *buf);
 void u32_to_word(uint32_t word_int, char *out);
 
 

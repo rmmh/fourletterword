@@ -108,7 +108,7 @@ static void word_int_test(void)
 // Big endian, for simpler decoding
 static uint32_t nibble_encode(int delta, uint32_t idx, uint8_t *buf)
 {
-    assert(delta > 0);
+    assert(delta > 0 && delta < UINT16_MAX);
     // calculate nibbles (inherently little-endian)
     unsigned nibbles = 0;
     uint8_t out[10];
@@ -142,9 +142,9 @@ static unsigned nibble_encoded_size(int delta)
 
 static void nibble_encode_test(void)
 {
-    uint32_t delta;
+    uint16_t delta;
     for (delta = 1; delta < 60000; delta++) {
-        uint32_t delta_dec;
+        uint16_t delta_dec;
         uint8_t buf[20];
 
         memset(buf, 0, 20);
