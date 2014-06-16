@@ -238,6 +238,7 @@ static void emit(char *fname)
 }
 
 static char *permutations[] = {
+    "mjqzfxvbcgkdpwtshnlruoaeiy", // 4019
     "mgxjqzvbdctwhfkspnlreoaiuy", // 4020
     "nuaioerytmfvjwgdlhscbkzxpq",
     "ueclwpkbyjhsaivdntofxmgrzq",
@@ -294,7 +295,7 @@ int main(int argc, char **argv)
         gen_permutation(letter_to_value, 26);
         best = -1;
         uint8_t iter_best[26];
-        for (iter = 0; iter < 50000; iter++) {
+        for (iter = 0; iter < 20000; iter++) {
             /* try a change */
             minor_change();
             unsigned bytes = compute_efficiency();
